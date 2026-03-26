@@ -11,8 +11,7 @@ import os
 import re
 import subprocess
 import sys
-import threading
-import time
+import tempfile
 import uuid
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
@@ -110,6 +109,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         prompt = build_prompt(messages)
         model_requested = body.get("model", "claude-sonnet-4-20250514")
+        # Validate model: only allow alphanumeric, hyphens, dots, underscores
+        if not re.fullmatch(r'[a-zA-Z0-9._-]+', model_requested):
+            self._send_error(400, "invalid_request_error", f"Invalid model: {model_requested}")
+            return
         msg_id = make_message_id()
 
         # Build the claude command — optimized for speed
@@ -122,18 +125,27 @@ class ProxyHandler(BaseHTTPRequestHandler):
             cmd.extend(["stream-json", "--verbose"])
         else:
             cmd.append("json")
+        # Write system prompt to a temp file to avoid ARG_MAX limits
+        sp_file = None
         if system_prompt:
-            cmd.extend(["--system-prompt", system_prompt])
+            sp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+            sp_file.write(system_prompt)
+            sp_file.close()
+            cmd.extend(["--system-prompt-file", sp_file.name])
 
         env = {**os.environ}
         # Allow running inside a Claude Code session
         env.pop("CLAUDECODE", None)
         env.pop("CLAUDE_CODE_ENTRYPOINT", None)
 
-        if stream:
-            self._handle_stream(cmd, env, prompt, msg_id, model_requested)
-        else:
-            self._handle_sync(cmd, env, prompt, msg_id, model_requested)
+        try:
+            if stream:
+                self._handle_stream(cmd, env, prompt, msg_id, model_requested)
+            else:
+                self._handle_sync(cmd, env, prompt, msg_id, model_requested)
+        finally:
+            if sp_file:
+                os.unlink(sp_file.name)
 
     def _handle_sync(self, cmd, env, prompt, msg_id, model):
         try:
@@ -181,9 +193,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
             stderr=subprocess.PIPE, text=True, env=env,
         )
 
-        # Send prompt and close stdin
-        proc.stdin.write(prompt)
-        proc.stdin.close()
+        try:
+            # Send prompt and close stdin
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+        except BrokenPipeError:
+            proc.kill()
+            self._send_error(502, "api_error", "claude process exited before accepting input")
+            return
 
         # Set up SSE streaming response
         self.send_response(200)
@@ -197,101 +214,103 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.wfile.write(payload.encode())
             self.wfile.flush()
 
-        # message_start
-        send_sse("message_start", {
-            "type": "message_start",
-            "message": {
-                "id": msg_id,
-                "type": "message",
-                "role": "assistant",
-                "content": [],
-                "model": model,
-                "stop_reason": None,
-                "stop_sequence": None,
-                "usage": {"input_tokens": 0, "output_tokens": 0},
-            },
-        })
+        try:
+            # message_start
+            send_sse("message_start", {
+                "type": "message_start",
+                "message": {
+                    "id": msg_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": model,
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                },
+            })
 
-        # content_block_start
-        send_sse("content_block_start", {
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "text", "text": ""},
-        })
+            # content_block_start
+            send_sse("content_block_start", {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            })
 
-        send_sse("ping", {"type": "ping"})
+            send_sse("ping", {"type": "ping"})
 
-        input_tokens = 0
-        output_tokens = 0
-        sent_any_delta = False
-        buffered_text = ""
+            input_tokens = 0
+            output_tokens = 0
+            buffered_text = ""
 
-        # Read stream-json lines from claude
-        for line in proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                sys.stderr.write(f"[claude-proxy] non-json line: {line}\n")
-                continue
+            # Read stream-json lines from claude
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    sys.stderr.write(f"[claude-proxy] non-json line: {line}\n")
+                    continue
 
-            sys.stderr.write(f"[claude-proxy] event: {event}\n")
-            evt_type = event.get("type", "")
+                sys.stderr.write(f"[claude-proxy] event: {event}\n")
+                evt_type = event.get("type", "")
 
-            if evt_type == "assistant":
-                # Text delta from claude — buffer it, send cleaned at end
-                msg = event.get("message", "")
-                if isinstance(msg, dict):
-                    content = msg.get("content", [])
-                    text = "".join(
-                        block.get("text", "")
-                        for block in content
-                        if isinstance(block, dict) and block.get("type") == "text"
-                    )
-                else:
-                    text = str(msg) if msg else ""
-                if text:
-                    # Buffer the latest full text (each event has cumulative text)
-                    buffered_text = text
-            elif evt_type == "result":
-                # Final result with usage info
-                usage = event.get("usage", {})
-                input_tokens = usage.get("input_tokens", 0) if isinstance(usage, dict) else 0
-                output_tokens = usage.get("output_tokens", 0) if isinstance(usage, dict) else 0
-                result_text = event.get("result", "")
-                # Use result text (most complete), fall back to buffered
-                final_text = strip_tool_blocks(result_text or buffered_text or "")
-                if final_text:
-                    sent_any_delta = True
-                    send_sse("content_block_delta", {
-                        "type": "content_block_delta",
-                        "index": 0,
-                        "delta": {"type": "text_delta", "text": final_text},
-                    })
+                if evt_type == "assistant":
+                    # Text from claude — buffer it (each event has cumulative text)
+                    msg = event.get("message", "")
+                    if isinstance(msg, dict):
+                        content = msg.get("content", [])
+                        text = "".join(
+                            block.get("text", "")
+                            for block in content
+                            if isinstance(block, dict) and block.get("type") == "text"
+                        )
+                    else:
+                        text = str(msg) if msg else ""
+                    if text:
+                        buffered_text = text
+                elif evt_type == "result":
+                    # Final result with usage info
+                    usage = event.get("usage", {})
+                    input_tokens = usage.get("input_tokens", 0) if isinstance(usage, dict) else 0
+                    output_tokens = usage.get("output_tokens", 0) if isinstance(usage, dict) else 0
+                    result_text = event.get("result", "")
+                    # Use result text (most complete), fall back to buffered
+                    final_text = strip_tool_blocks(result_text or buffered_text or "")
+                    if final_text:
+                        send_sse("content_block_delta", {
+                            "type": "content_block_delta",
+                            "index": 0,
+                            "delta": {"type": "text_delta", "text": final_text},
+                        })
 
-        proc.wait()
-        stderr_out = proc.stderr.read()
-        if stderr_out:
-            sys.stderr.write(f"[claude-proxy] claude stderr: {stderr_out}\n")
+            proc.wait()
+            stderr_out = proc.stderr.read()
+            if stderr_out:
+                sys.stderr.write(f"[claude-proxy] claude stderr: {stderr_out}\n")
 
-        # content_block_stop
-        send_sse("content_block_stop", {
-            "type": "content_block_stop",
-            "index": 0,
-        })
+            # content_block_stop
+            send_sse("content_block_stop", {
+                "type": "content_block_stop",
+                "index": 0,
+            })
 
-        # message_delta
-        send_sse("message_delta", {
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-            "usage": {"output_tokens": output_tokens},
-        })
+            # message_delta
+            send_sse("message_delta", {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": output_tokens},
+            })
 
-        # message_stop
-        send_sse("message_stop", {"type": "message_stop"})
-        self.close_connection = True
+            # message_stop
+            send_sse("message_stop", {"type": "message_stop"})
+        except (BrokenPipeError, ConnectionResetError):
+            sys.stderr.write("[claude-proxy] client disconnected during stream\n")
+            proc.kill()
+        finally:
+            self.close_connection = True
 
     def do_GET(self):
         if self.path == "/health":

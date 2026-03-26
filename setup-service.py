@@ -64,11 +64,11 @@ def _systemd_install(python_path: str, script_path: Path, port: int):
 
         [Service]
         Type=simple
-        ExecStart={python_path} {script_path} {port}
+        ExecStart="{python_path}" "{script_path}" {port}
         Restart=on-failure
         RestartSec=5
-        Environment=PATH={os.environ.get("PATH", "")}
-        Environment=HOME={Path.home()}
+        Environment="PATH={os.environ.get("PATH", "")}"
+        Environment="HOME={Path.home()}"
 
         [Install]
         WantedBy=default.target
