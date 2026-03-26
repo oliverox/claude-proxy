@@ -321,8 +321,173 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self._send_json(200, {"status": "ok"})
+        elif self.path == "/help":
+            self._send_help()
         else:
             self._send_error(404, "not_found_error", f"Unknown endpoint: {self.path}")
+
+    def _send_help(self):
+        help_text = {
+            "name": "claude-proxy",
+            "description": (
+                "An HTTP proxy that wraps the Claude Code CLI (claude -p) and exposes "
+                "an Anthropic-compatible /v1/messages API. It provides access to Claude "
+                "Code's full toolbox (Bash, file editing, search, git) through a standard "
+                "API, using your Claude Code subscription for authentication — no API key required."
+            ),
+            "endpoints": {
+                "POST /v1/messages": {
+                    "description": (
+                        "Anthropic-compatible Messages API. Send a conversation and receive "
+                        "a response from Claude, powered by Claude Code's tools and capabilities."
+                    ),
+                    "request": {
+                        "model": {
+                            "type": "string",
+                            "required": False,
+                            "default": "claude-sonnet-4-20250514",
+                            "description": (
+                                "Model to use. Accepts aliases ('opus', 'sonnet', 'haiku') "
+                                "or full model IDs ('claude-opus-4-6', 'claude-sonnet-4-6'). "
+                                "Any value accepted by Claude Code's --model flag works."
+                            ),
+                            "examples": ["sonnet", "opus", "haiku", "claude-opus-4-6", "claude-sonnet-4-6"],
+                        },
+                        "messages": {
+                            "type": "array",
+                            "required": True,
+                            "description": (
+                                "Array of message objects. Each has 'role' ('user' or 'assistant') "
+                                "and 'content' (string or array of content blocks with 'type' and 'text')."
+                            ),
+                            "example": [{"role": "user", "content": "Hello!"}],
+                        },
+                        "system": {
+                            "type": "string or array",
+                            "required": False,
+                            "description": (
+                                "System prompt. By default, this is APPENDED to Claude Code's "
+                                "built-in system prompt, preserving its tool usage instructions "
+                                "(Bash, Edit, Read, Grep, etc.). Set 'system_replace' to true "
+                                "to fully override the built-in prompt instead."
+                            ),
+                        },
+                        "system_replace": {
+                            "type": "boolean",
+                            "required": False,
+                            "default": False,
+                            "description": (
+                                "If true, the 'system' field fully REPLACES Claude Code's built-in "
+                                "system prompt. Use this for plain chat without Claude Code's tools. "
+                                "If false (default), the system prompt is appended to the built-in one."
+                            ),
+                        },
+                        "stream": {
+                            "type": "boolean",
+                            "required": False,
+                            "default": False,
+                            "description": (
+                                "If true, returns Server-Sent Events (SSE) following the Anthropic "
+                                "streaming protocol (message_start, content_block_delta, message_stop). "
+                                "If false, returns a single JSON response."
+                            ),
+                        },
+                        "max_tokens": {
+                            "type": "number",
+                            "required": False,
+                            "description": "Accepted for API compatibility but not enforced. Claude Code manages token limits.",
+                        },
+                    },
+                    "response": {
+                        "non_streaming": (
+                            "Standard Anthropic message object with id, type, role, content "
+                            "(array of text blocks), model, stop_reason, and usage."
+                        ),
+                        "streaming": (
+                            "SSE stream: message_start, content_block_start, ping, "
+                            "content_block_delta (with text), content_block_stop, "
+                            "message_delta (with stop_reason and usage), message_stop."
+                        ),
+                    },
+                    "authentication": "No API key required. Any value for x-api-key or Authorization is accepted.",
+                },
+                "GET /health": {
+                    "description": "Health check endpoint.",
+                    "response": {"status": "ok"},
+                },
+                "GET /help": {
+                    "description": "This endpoint. Returns machine-readable API documentation.",
+                },
+            },
+            "capabilities": [
+                "Claude Code's full tool suite: Bash shell, file read/write/edit, glob/grep search, git operations",
+                "Model switching via the 'model' field — use aliases or full model IDs",
+                "System prompt customization — append (default) or replace Claude Code's built-in prompt",
+                "Both streaming (SSE) and non-streaming (JSON) response modes",
+                "Compatible with Anthropic Python SDK, TypeScript SDK, and any Anthropic API client",
+            ],
+            "notes": [
+                "Each request is stateless — there is no multi-turn session persistence across requests",
+                "Tool call/result XML blocks in Claude's output are stripped; only text is returned",
+                "The proxy binds to 127.0.0.1 only and is intended for local/personal use",
+                "Claude Code's tools (Bash, Edit, etc.) are available unless system_replace is true with a custom prompt",
+            ],
+            "examples": {
+                "simple_chat": {
+                    "description": "Basic non-streaming request",
+                    "request": {
+                        "method": "POST",
+                        "url": "/v1/messages",
+                        "body": {
+                            "model": "sonnet",
+                            "max_tokens": 1024,
+                            "messages": [{"role": "user", "content": "What is 2 + 2?"}],
+                        },
+                    },
+                },
+                "with_system_prompt": {
+                    "description": "Append a custom system instruction while keeping Claude Code's tools",
+                    "request": {
+                        "method": "POST",
+                        "url": "/v1/messages",
+                        "body": {
+                            "model": "opus",
+                            "max_tokens": 2048,
+                            "system": "Always respond in Spanish.",
+                            "messages": [{"role": "user", "content": "Explain recursion."}],
+                        },
+                    },
+                },
+                "plain_chat_no_tools": {
+                    "description": "Replace the system prompt entirely for plain chat without Claude Code tools",
+                    "request": {
+                        "method": "POST",
+                        "url": "/v1/messages",
+                        "body": {
+                            "model": "sonnet",
+                            "max_tokens": 1024,
+                            "system": "You are a helpful translator. Translate the user's message to French.",
+                            "system_replace": True,
+                            "messages": [{"role": "user", "content": "Good morning, how are you?"}],
+                        },
+                    },
+                },
+                "streaming": {
+                    "description": "Streaming request with SSE",
+                    "request": {
+                        "method": "POST",
+                        "url": "/v1/messages",
+                        "body": {
+                            "model": "sonnet",
+                            "max_tokens": 1024,
+                            "stream": True,
+                            "messages": [{"role": "user", "content": "Write a short poem."}],
+                        },
+                    },
+                },
+            },
+        }
+        self._send_json(200, help_text)
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -335,6 +500,7 @@ def main():
     server = ThreadedHTTPServer(("127.0.0.1", port), ProxyHandler)
     print(f"Claude proxy server listening on http://127.0.0.1:{port}")
     print(f"  POST /v1/messages  — Anthropic-compatible Messages API")
+    print(f"  GET  /help         — Machine-readable API documentation")
     print(f"  GET  /health       — Health check")
     print()
     print("Usage with Anthropic SDK:")

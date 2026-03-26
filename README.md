@@ -273,6 +273,14 @@ curl http://127.0.0.1:8082/v1/messages \
 - **Non-streaming:** Returns a standard Anthropic `message` object with `content`, `usage`, `stop_reason`, etc.
 - **Streaming:** Returns Server-Sent Events (SSE) following the Anthropic streaming protocol (`message_start`, `content_block_delta`, `message_stop`, etc.)
 
+### `GET /help`
+
+Returns a machine-readable JSON document describing all endpoints, request fields, capabilities, and usage examples. Designed for LLMs and automated tools to discover and understand the API:
+
+```bash
+curl http://127.0.0.1:8082/help
+```
+
 ### `GET /health`
 
 Returns `{"status": "ok"}` — useful for readiness checks.
