@@ -332,7 +332,41 @@ def _update(handlers):
     handlers["restart"]()
 
 
+def _help():
+    """Print detailed help for all commands."""
+    print("setup-service.py — Manage claude-proxy as an auto-start service")
+    print()
+    print("Usage: python setup-service.py <command> [options]")
+    print()
+    print("Commands:")
+    print("  install     Install and start claude-proxy as a system service")
+    print("  uninstall   Stop and remove the service")
+    print("  restart     Restart the running service")
+    print("  update      Pull latest changes from git and restart")
+    print("  status      Show current service status")
+    print("  help        Show this help message")
+    print()
+    print("Options:")
+    print(f"  --port PORT  Port for claude-proxy (default: {DEFAULT_PORT}, install only)")
+    print()
+    print("Platform support:")
+    print("  Linux    systemd user service (~/.config/systemd/user/claude-proxy.service)")
+    print("  macOS    launchd LaunchAgent  (~/Library/LaunchAgents/com.claude-proxy.plist)")
+    print("  Windows  Scheduled Task       (Task Scheduler: ClaudeProxy)")
+    print()
+    print("Examples:")
+    print("  python setup-service.py install             # Install on default port 8082")
+    print("  python setup-service.py install --port 9000 # Install on custom port")
+    print("  python setup-service.py update              # Pull latest and restart")
+    print("  python setup-service.py status              # Check if running")
+
+
 def main():
+    # Handle help before argparse so "help" doesn't need to be in choices
+    if len(sys.argv) > 1 and sys.argv[1] == "help":
+        _help()
+        return
+
     parser = argparse.ArgumentParser(
         description="Manage claude-proxy as an auto-start service.",
     )
