@@ -106,6 +106,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 block["text"] for block in system_prompt
                 if isinstance(block, dict) and block.get("type") == "text"
             )
+        # By default, append to Claude Code's built-in system prompt.
+        # Set "system_replace": true to fully override it instead.
+        system_replace = body.get("system_replace", False)
 
         prompt = build_prompt(messages)
         model_requested = body.get("model", "claude-sonnet-4-20250514")
@@ -131,7 +134,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
             sp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
             sp_file.write(system_prompt)
             sp_file.close()
-            cmd.extend(["--system-prompt-file", sp_file.name])
+            if system_replace:
+                cmd.extend(["--system-prompt-file", sp_file.name])
+            else:
+                cmd.extend(["--append-system-prompt-file", sp_file.name])
 
         env = {**os.environ}
         # Allow running inside a Claude Code session

@@ -240,9 +240,33 @@ Anthropic-compatible Messages API endpoint. Accepts the same request format as t
 |---|---|---|
 | `model` | string | Model alias (`"opus"`, `"sonnet"`, `"haiku"`) or full model ID (e.g. `"claude-sonnet-4-6"`). Default: `claude-sonnet-4-20250514` |
 | `messages` | array | Array of message objects with `role` and `content` (required) |
-| `system` | string or array | System prompt — string or array of content blocks |
+| `system` | string or array | System prompt — appended to Claude Code's built-in prompt by default (see below) |
+| `system_replace` | boolean | If `true`, fully replace Claude Code's built-in system prompt instead of appending (default: `false`) |
 | `stream` | boolean | Enable SSE streaming (default: `false`) |
 | `max_tokens` | number | Accepted but not enforced (Claude Code manages this) |
+
+**System prompt behavior:**
+
+By default, the `system` field is **appended** to Claude Code's built-in system prompt. This preserves Claude Code's tool usage instructions (Bash, Edit, Read, etc.) while adding your custom instructions on top.
+
+Set `"system_replace": true` to **fully override** Claude Code's built-in prompt. Use this when you want a plain chat experience without Claude Code's tools or conventions.
+
+```bash
+# Append (default) — Claude Code tools still work
+curl http://127.0.0.1:8082/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{"model": "sonnet", "max_tokens": 1024,
+       "system": "Always respond in French.",
+       "messages": [{"role": "user", "content": "Hello!"}]}'
+
+# Replace — plain Claude, no built-in tools
+curl http://127.0.0.1:8082/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{"model": "sonnet", "max_tokens": 1024,
+       "system": "You are a helpful translator.",
+       "system_replace": true,
+       "messages": [{"role": "user", "content": "Translate: good morning"}]}'
+```
 
 **Response format:**
 
