@@ -87,7 +87,75 @@ This works across all platforms:
 sudo loginctl enable-linger $USER
 ```
 
-## Usage
+## Use cases
+
+### Drop-in backend for AI coding tools
+
+Many AI-powered tools (Cursor, Continue, Cody, Aider, etc.) let you configure a custom API endpoint. Point them at claude-proxy and they'll use your Claude Code subscription instead of requiring a separate API key:
+
+```
+# In your tool's settings, set:
+API Base URL: http://127.0.0.1:8082
+API Key:      not-needed
+```
+
+### Scripts and automation
+
+Use the Anthropic SDK in your own scripts without managing API keys. Claude Code handles authentication, and you get its full toolbox (file editing, shell access, search) for free:
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic(base_url="http://127.0.0.1:8082", api_key="x")
+
+# Ask Claude to analyze a log file — it can read files via Claude Code's tools
+response = client.messages.create(
+    model="sonnet",
+    max_tokens=4096,
+    system="You are a log analysis assistant.",
+    messages=[{"role": "user", "content": "Summarize the errors in /var/log/syslog from today."}],
+)
+print(response.content[0].text)
+```
+
+### Running alongside Claude Code
+
+The proxy works even when launched from within a Claude Code session. It strips the `CLAUDECODE` environment variable so spawned `claude -p` processes don't conflict with the parent session.
+
+### Personal AI assistant with OpenClaw
+
+[OpenClaw](https://github.com/openclaw/openclaw) is an open-source, self-hosted AI assistant that connects through your existing chat apps (WhatsApp, Telegram, Slack, Discord, etc.). Configure it to use claude-proxy as its model provider and you get Claude Code's full capabilities — file access, shell commands, search — behind your preferred messaging app, all without an API key:
+
+```
+# In OpenClaw's model provider config, set:
+Provider:  Anthropic
+API URL:   http://127.0.0.1:8082
+API Key:   not-needed
+Model:     sonnet
+```
+
+### Chatbots and web apps
+
+Build a lightweight chat interface backed by Claude without API key management:
+
+```python
+from flask import Flask, request, jsonify
+from anthropic import Anthropic
+
+app = Flask(__name__)
+client = Anthropic(base_url="http://127.0.0.1:8082", api_key="x")
+
+@app.route("/chat", methods=["POST"])
+def chat():
+    response = client.messages.create(
+        model="sonnet",
+        max_tokens=2048,
+        messages=request.json["messages"],
+    )
+    return jsonify({"reply": response.content[0].text})
+```
+
+## Usage examples
 
 ### With the Anthropic Python SDK
 
