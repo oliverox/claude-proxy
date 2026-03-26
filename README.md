@@ -55,6 +55,38 @@ Claude proxy server listening on http://127.0.0.1:8082
   GET  /health       — Health check
 ```
 
+## Run on boot
+
+Install claude-proxy as a service that starts automatically on login/boot:
+
+```bash
+# Install and start the service (default port 8082)
+python setup-service.py install
+
+# Or specify a custom port
+python setup-service.py install --port 9000
+
+# Check service status
+python setup-service.py status
+
+# Remove the service
+python setup-service.py uninstall
+```
+
+This works across all platforms:
+
+| Platform | Mechanism | Service location |
+|---|---|---|
+| **Linux** | systemd user service | `~/.config/systemd/user/claude-proxy.service` |
+| **macOS** | launchd LaunchAgent | `~/Library/LaunchAgents/com.claude-proxy.plist` |
+| **Windows** | Scheduled Task (ONLOGON) | Task Scheduler: `ClaudeProxy` |
+
+**Linux note:** By default, user services only run while you're logged in. To keep the service running after logout:
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
 ## Usage
 
 ### With the Anthropic Python SDK
