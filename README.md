@@ -69,6 +69,12 @@ python setup-service.py install --port 9000
 # Check service status
 python setup-service.py status
 
+# Pull latest changes and restart the service
+python setup-service.py update
+
+# Restart the service (after manual changes)
+python setup-service.py restart
+
 # Remove the service
 python setup-service.py uninstall
 ```

@@ -20,6 +20,7 @@ SERVICE_NAME = "claude-proxy"
 LAUNCHD_LABEL = "com.claude-proxy"
 SCHTASKS_NAME = "ClaudeProxy"
 DEFAULT_PORT = 8082
+REPO_URL = "https://github.com/oliverox/claude-proxy.git"
 
 
 def detect_python() -> str:
@@ -90,6 +91,15 @@ def _systemd_install(python_path: str, script_path: Path, port: int):
         print("Warning: User linger is not enabled. The service will only run while you")
         print("are logged in. To keep it running after logout, run:")
         print(f"  sudo loginctl enable-linger {os.environ.get('USER', '$USER')}")
+
+
+def _systemd_restart():
+    unit = _systemd_unit_path()
+    if not unit.exists():
+        print(f"Service {SERVICE_NAME} is not installed.")
+        return
+    run_cmd(["systemctl", "--user", "restart", f"{SERVICE_NAME}.service"])
+    print(f"Service {SERVICE_NAME} restarted.")
 
 
 def _systemd_uninstall():
@@ -180,6 +190,16 @@ def _launchd_install(python_path: str, script_path: Path, port: int):
     print(f"Logs: {log_dir}/")
 
 
+def _launchd_restart():
+    plist_path = _launchd_plist_path()
+    if not plist_path.exists():
+        print(f"Service {SERVICE_NAME} is not installed.")
+        return
+    run_cmd(["launchctl", "unload", str(plist_path)], check=False)
+    run_cmd(["launchctl", "load", "-w", str(plist_path)])
+    print(f"Service {SERVICE_NAME} restarted.")
+
+
 def _launchd_uninstall():
     plist_path = _launchd_plist_path()
     if not plist_path.exists():
@@ -234,6 +254,12 @@ def _windows_install(python_path: str, script_path: Path, port: int):
     print(f"Log: {log_path}")
 
 
+def _windows_restart():
+    run_cmd(["schtasks", "/End", "/TN", SCHTASKS_NAME], check=False)
+    run_cmd(["schtasks", "/Run", "/TN", SCHTASKS_NAME], check=False)
+    print(f"Task {SCHTASKS_NAME} restarted.")
+
+
 def _windows_uninstall():
     run_cmd(["schtasks", "/End", "/TN", SCHTASKS_NAME], check=False)
     result = run_cmd(["schtasks", "/Delete", "/TN", SCHTASKS_NAME, "/F"], check=False, capture=True)
@@ -260,26 +286,57 @@ PLATFORMS = {
     "linux": {
         "install": _systemd_install,
         "uninstall": _systemd_uninstall,
+        "restart": _systemd_restart,
         "status": _systemd_status,
     },
     "darwin": {
         "install": _launchd_install,
         "uninstall": _launchd_uninstall,
+        "restart": _launchd_restart,
         "status": _launchd_status,
     },
     "windows": {
         "install": _windows_install,
         "uninstall": _windows_uninstall,
+        "restart": _windows_restart,
         "status": _windows_status,
     },
 }
+
+
+def _update(handlers):
+    """Pull latest changes from git and restart the service if running."""
+    repo_dir = Path(__file__).resolve().parent
+
+    # Check if this is a git repo
+    if not (repo_dir / ".git").exists():
+        print(f"Error: {repo_dir} is not a git repository.", file=sys.stderr)
+        print(f"Clone it first: git clone {REPO_URL}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Updating claude-proxy in {repo_dir}...")
+    result = run_cmd(["git", "-C", str(repo_dir), "pull", "--ff-only"], capture=True)
+    if result.returncode != 0:
+        print("Update failed. You may have local changes — try: git pull --rebase", file=sys.stderr)
+        sys.exit(1)
+
+    output = (result.stdout or "").strip()
+    print(output)
+
+    if "Already up to date" in output:
+        return
+
+    # Restart the service if installed
+    print()
+    print("Restarting service...")
+    handlers["restart"]()
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Manage claude-proxy as an auto-start service.",
     )
-    parser.add_argument("action", choices=["install", "uninstall", "status"],
+    parser.add_argument("action", choices=["install", "uninstall", "restart", "update", "status"],
                         help="Action to perform")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT,
                         help=f"Port for claude-proxy (default: {DEFAULT_PORT}, install only)")
@@ -306,6 +363,10 @@ def main():
         handlers["install"](python_path, script_path, args.port)
     elif args.action == "uninstall":
         handlers["uninstall"]()
+    elif args.action == "restart":
+        handlers["restart"]()
+    elif args.action == "update":
+        _update(handlers)
     elif args.action == "status":
         handlers["status"]()
 
